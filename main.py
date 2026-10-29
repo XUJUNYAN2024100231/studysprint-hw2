@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 BASE = Path(__file__).resolve().parent
-VERSION = "1.0.2"
+VERSION = "1.0.3"
 app = FastAPI(title="StudySprint API", version=VERSION)
 
 
