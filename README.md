@@ -14,6 +14,7 @@ This is an education/productivity service. It plans academic workloads; the lect
 - See overdue tasks, capacity shortfalls, and work extending beyond the planning window.
 - Keep tasks in the current browser's localStorage; import/export JSON for backup.
 - Responsive desktop/mobile interface; visible service status, version, and deployed commit revision.
+- Switch between English, Chinese, and Korean in the top-right language menu. Your choice is remembered on this browser. Dates, interface labels, dialogs, and planning messages are localized; your assignment titles and course names are preserved as entered.
 
 ## Run locally on Windows
 
