@@ -36,5 +36,46 @@ jobs:
           name: test-results
           path: test-results.xml
 
-# Render reads the result of this check. render.yaml selects checksPass, so
-# failed tests block automatic deployment. No deploy-hook secret is required.
+  deploy:
+    name: Deploy the tested commit to Render
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Notify Render without printing the secret URL
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+          DEPLOY_COMMIT: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          hook = os.environ.get("RENDER_DEPLOY_HOOK_URL", "").strip()
+          if not hook:
+              raise SystemExit("Add the RENDER_DEPLOY_HOOK_URL repository secret first.")
+          parts = urllib.parse.urlsplit(hook)
+          if parts.scheme != "https" or parts.hostname != "api.render.com" or not parts.path.startswith("/deploy/"):
+              raise SystemExit("The configured secret is not a Render deploy-hook URL.")
+          revision = os.environ["DEPLOY_COMMIT"]
+          if not re.fullmatch(r"[0-9a-f]{40}", revision):
+              raise SystemExit("Invalid deployment revision.")
+          query = [(key, value) for key, value in urllib.parse.parse_qsl(parts.query) if key != "ref"]
+          query.append(("ref", revision))
+          target = urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(query)))
+          request = urllib.request.Request(target, data=b"", method="POST")
+          try:
+              with urllib.request.urlopen(request, timeout=45) as response:
+                  if response.status not in (200, 202):
+                      raise SystemExit("Render did not accept the deploy request.")
+          except urllib.error.HTTPError as error:
+              raise SystemExit(f"Render deploy request failed with HTTP {error.code}.") from None
+          except urllib.error.URLError:
+              raise SystemExit("Could not connect to Render. The secret URL was not logged.") from None
+          print("Render accepted deployment of tested commit " + revision[:12] + ".")
+          print("Verify the live /api/health revision before marking deployment complete.")
+          PY

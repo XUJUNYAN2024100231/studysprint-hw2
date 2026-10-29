@@ -52,8 +52,9 @@ User tasks are sent to the planning API when a plan is requested, processed in m
 1. Upload this folder's contents to the root of a new GitHub repository, including `.github/workflows/ci.yml` and `render.yaml`.
 2. GitHub Actions runs the tests on pushes to `main` and on pull requests.
 3. Sign in to Render and connect the GitHub account/repository. Create a Blueprint from `render.yaml`, or a Python Web Service with the settings below.
-4. Set Auto-Deploy to **After CI Checks Pass**. A passing push to `main` triggers the deploy; a failing check blocks it.
-5. After the service reports a successful deploy, open its actual URL and `/api/health`. The health response's revision should match the GitHub commit.
+4. In Render's service Settings, copy the secret **Deploy Hook** URL. In the GitHub repository's Settings > Secrets and variables > Actions, create a repository secret named `RENDER_DEPLOY_HOOK_URL` containing that URL. Do not put the value in source code, screenshots, or reports.
+5. The workflow's `deploy` job runs only after the test job passes, and only for a push to `main`. It sends a POST request to the hook with the exact tested commit revision. Pull requests run tests without deployment. This explicit CI/CD trigger works independently of Render detecting GitHub CI events. The existing native Auto-Deploy setting may remain After CI Checks Pass.
+6. After Render finishes deploying, open the actual service URL and `/api/health`. The health response's revision must match the GitHub commit. Acceptance of a hook request alone is not proof of a completed deployment.
 
 | Render setting | Value |
 | --- | --- |
@@ -64,7 +65,7 @@ User tasks are sent to the planning API when a plan is requested, processed in m
 | Auto-Deploy | After CI Checks Pass |
 | Instance plan | Free, if available for the account |
 
-Connect the GitHub provider directly in Render; entering only a public repository URL does not enable automatic deployment. Do not publish credentials or deployment-hook secrets. Choose an available free instance explicitly; do not accept a paid plan without reviewing it.
+Connect the GitHub provider directly in Render for its native automatic-deploy integration. Entering only a public repository URL does not enable that integration; the explicit GitHub Actions deploy-hook job provides the tested-commit deployment trigger. The hook is read only from GitHub Secrets and its value is never printed. Choose an available free instance explicitly; do not accept a paid plan without reviewing it.
 
 ## Evidence to collect for HW2
 
@@ -82,3 +83,4 @@ Local execution, a YAML file, and a successful CI run alone do not prove that de
 - Render FastAPI deployment: https://render.com/docs/deploy-fastapi
 - Render automatic deployments: https://render.com/docs/deploys#automatic-deploys
 - Render Blueprint reference: https://render.com/docs/blueprint-spec
+- Render deploy hooks with GitHub Actions: https://render.com/docs/deploy-hooks
