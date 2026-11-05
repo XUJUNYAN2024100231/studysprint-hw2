@@ -134,7 +134,7 @@ jobs:
     runs-on: [self-hosted, Windows, X64, studysprint-hw3]
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
       - name: Pull exact image digest, check candidate, update and verify service
