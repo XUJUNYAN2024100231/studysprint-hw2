@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 BASE = Path(__file__).resolve().parent
-VERSION = "1.2.1"
+VERSION = "1.2.2"
 app = FastAPI(title="StudySprint API", version=VERSION)
 
 
@@ -117,6 +117,15 @@ async def response_headers(request: Request, call_next):
         "img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; "
         "base-uri 'self'; frame-ancestors 'none'"
     )
+    if request.url.path in ("/docs", "/redoc"):
+        # FastAPI's documentation uses trusted CDN assets and an inline initializer.
+        # Keep this exception scoped to documentation, preserving the app's policy.
+        response.headers["Content-Security-Policy"] = response.headers["Content-Security-Policy"].replace(
+            "script-src 'self';", "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net;"
+        ).replace(
+            "style-src 'self' 'unsafe-inline';",
+            "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net;",
+        )
     if request.url.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store"
     return response
