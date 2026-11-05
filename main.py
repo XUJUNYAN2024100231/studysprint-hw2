@@ -1,4 +1,4 @@
-"""StudySprint: a deadline-aware planning service for HW2."""
+"""StudySprint: a deadline-aware planning service with Docker CI/CD for HW3."""
 from datetime import date, timedelta
 import os
 from pathlib import Path
@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 BASE = Path(__file__).resolve().parent
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 app = FastAPI(title="StudySprint API", version=VERSION)
 
 
@@ -124,8 +124,9 @@ async def response_headers(request: Request, call_next):
 
 @app.get("/api/health")
 def health():
+    revision = os.environ.get("RENDER_GIT_COMMIT") or os.environ.get("BUILD_REVISION", "local")
     return {"status": "ok", "service": "StudySprint", "version": VERSION,
-            "revision": os.environ.get("RENDER_GIT_COMMIT", "local")[:12]}
+            "revision": revision[:12], "revision_full": revision}
 
 
 @app.post("/api/plan")

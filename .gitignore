@@ -13,3 +13,10 @@ screenshots/
 node_modules/
 .DS_Store
 Thumbs.db
+deployment-evidence.json
+container-smoke.txt
+.runner
+.credentials*
+_diag/
+_work/
+update-evidence.json

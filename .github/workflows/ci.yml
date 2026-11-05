@@ -1,4 +1,4 @@
-name: StudySprint CI
+name: StudySprint Docker CI-CD
 
 "on":
   push:
@@ -11,71 +11,147 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: docker-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   test:
-    name: Python API and scheduling tests
+    name: Test application and deployment rollback
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-python@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
           cache: pip
-      - name: Install dependencies
-        run: python -m pip install -r requirements-dev.txt
-      - name: Test scheduling rules, validation, API, and frontend routes
-        run: python -m pytest -q --junitxml=test-results.xml
-      - name: Keep the test report
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m pytest -q --junitxml=test-results.xml
+      - name: Keep actual test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results
+          name: unit-test-results
           path: test-results.xml
 
-  deploy:
-    name: Deploy the tested commit to Render
+  image:
+    name: Build and smoke-test Docker image, then publish when enabled
     needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 20
+    outputs:
+      image: ${{ steps.registry.outputs.image }}
+      digest: ${{ steps.publish.outputs.digest }}
     steps:
-      - name: Notify Render without printing the secret URL
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Validate registry namespace
+        id: registry
+        if: github.event_name != 'pull_request' && vars.HW3_DOCKER_ENABLED == 'true'
         env:
-          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
-          DEPLOY_COMMIT: ${{ github.sha }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
           python - <<'PY'
-          import os
-          import re
-          import urllib.error
-          import urllib.parse
-          import urllib.request
-
-          hook = os.environ.get("RENDER_DEPLOY_HOOK_URL", "").strip()
-          if not hook:
-              raise SystemExit("Add the RENDER_DEPLOY_HOOK_URL repository secret first.")
-          parts = urllib.parse.urlsplit(hook)
-          if parts.scheme != "https" or parts.hostname != "api.render.com" or not parts.path.startswith("/deploy/"):
-              raise SystemExit("The configured secret is not a Render deploy-hook URL.")
-          revision = os.environ["DEPLOY_COMMIT"]
-          if not re.fullmatch(r"[0-9a-f]{40}", revision):
-              raise SystemExit("Invalid deployment revision.")
-          query = [(key, value) for key, value in urllib.parse.parse_qsl(parts.query) if key != "ref"]
-          query.append(("ref", revision))
-          target = urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(query)))
-          request = urllib.request.Request(target, data=b"", method="POST")
-          try:
-              with urllib.request.urlopen(request, timeout=45) as response:
-                  if response.status not in (200, 202):
-                      raise SystemExit("Render did not accept the deploy request.")
-          except urllib.error.HTTPError as error:
-              raise SystemExit(f"Render deploy request failed with HTTP {error.code}.") from None
-          except urllib.error.URLError:
-              raise SystemExit("Could not connect to Render. The secret URL was not logged.") from None
-          print("Render accepted deployment of tested commit " + revision[:12] + ".")
-          print("Verify the live /api/health revision before marking deployment complete.")
+          import os, re
+          name = os.environ.get("DOCKERHUB_USERNAME", "")
+          if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{2,29}", name):
+              raise SystemExit("Configure the DOCKERHUB_USERNAME repository secret.")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
+              stream.write("image=docker.io/" + name + "/studysprint\n")
           PY
+      - uses: docker/setup-buildx-action@v4
+      - name: Build the exact commit for a real container smoke test
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: studysprint-smoke:${{ github.sha }}
+          build-args: BUILD_REVISION=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Verify the built service before publication
+        env:
+          EXPECTED_REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          trap 'docker rm -f studysprint-ci >/dev/null 2>&1 || true' EXIT
+          docker run -d --name studysprint-ci -p 127.0.0.1:18080:8000 \
+            --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+            --cap-drop ALL --security-opt no-new-privileges:true \
+            studysprint-smoke:$EXPECTED_REVISION
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:18080/api/health >/dev/null; then break; fi
+            sleep 1
+          done
+          python scripts/smoke_container.py --base-url http://127.0.0.1:18080 \
+            --revision "$EXPECTED_REVISION" | tee container-smoke.txt
+      - name: Sign in using the repository secret
+        if: github.event_name != 'pull_request' && vars.HW3_DOCKER_ENABLED == 'true'
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Publish tested image with immutable commit tag
+        id: publish
+        if: github.event_name != 'pull_request' && vars.HW3_DOCKER_ENABLED == 'true'
+        env:
+          IMAGE_NAME: ${{ steps.registry.outputs.image }}
+          IMAGE_REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          docker tag "studysprint-smoke:$IMAGE_REVISION" "$IMAGE_NAME:$IMAGE_REVISION"
+          docker push "$IMAGE_NAME:$IMAGE_REVISION"
+          docker tag "studysprint-smoke:$IMAGE_REVISION" "$IMAGE_NAME:latest"
+          docker push "$IMAGE_NAME:latest"
+          python - <<'PY'
+          import json, os, re, subprocess
+          name = os.environ["IMAGE_NAME"] + ":" + os.environ["IMAGE_REVISION"]
+          data = json.loads(subprocess.check_output(["docker", "image", "inspect", name]))[0]
+          digests = data.get("RepoDigests", [])
+          expected = os.environ["IMAGE_NAME"].removeprefix("docker.io/")
+          matches = [d.split("@", 1)[1] for d in digests
+                     if d.split("@", 1)[0].removeprefix("docker.io/") == expected]
+          if not matches or not re.fullmatch(r"sha256:[0-9a-f]{64}", matches[0]):
+              raise SystemExit("Published image digest could not be verified.")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
+              stream.write("digest=" + matches[0] + "\n")
+          print("Published the smoke-tested image digest: " + matches[0])
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: container-smoke-results
+          path: container-smoke.txt
+
+  deploy:
+    name: Pull and verify image on the Windows self-hosted runner
+    needs: image
+    if: >-
+      github.event_name != 'pull_request' &&
+      github.repository == 'XUJUNYAN2024100231/studysprint-hw2' &&
+      github.ref == 'refs/heads/main' && vars.HW3_DOCKER_ENABLED == 'true'
+    runs-on: [self-hosted, Windows, X64, studysprint-hw3]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Pull exact image digest, check candidate, update and verify service
+        shell: powershell
+        env:
+          STUDYSPRINT_IMAGE: ${{ needs.image.outputs.image }}@${{ needs.image.outputs.digest }}
+          STUDYSPRINT_REVISION: ${{ github.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python scripts/deploy_container.py --image "$env:STUDYSPRINT_IMAGE" --revision "$env:STUDYSPRINT_REVISION"
+          if ($LASTEXITCODE -ne 0) { throw 'Container deployment failed; inspect rollback logs.' }
+          python scripts/smoke_container.py --revision "$env:STUDYSPRINT_REVISION"
+          if ($LASTEXITCODE -ne 0) { throw 'Live container smoke verification failed.' }
+      - name: Save actual container deployment evidence
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-container-deployment
+          path: deployment-evidence.json
