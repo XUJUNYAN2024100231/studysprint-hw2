@@ -42,7 +42,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:
-      image: ${{ steps.registry.outputs.image }}
       digest: ${{ steps.publish.outputs.digest }}
     steps:
       - uses: actions/checkout@v6
@@ -141,7 +140,7 @@ jobs:
       - name: Pull exact image digest, check candidate, update and verify service
         shell: powershell
         env:
-          STUDYSPRINT_IMAGE: ${{ needs.image.outputs.image }}@${{ needs.image.outputs.digest }}
+          STUDYSPRINT_IMAGE: docker.io/${{ secrets.DOCKERHUB_USERNAME }}/studysprint@${{ needs.image.outputs.digest }}
           STUDYSPRINT_REVISION: ${{ github.sha }}
         run: |
           $ErrorActionPreference = 'Stop'
